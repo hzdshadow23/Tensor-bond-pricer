@@ -40,6 +40,32 @@ C++ (libtorch) for deployment. Same ATen/autograd engine underneath.
 - `analyze(bond, curve, spread)` returns PV, parallel DV01, modified duration,
   and per-node key-rate DV01 via autograd.
 
+**Forecast (projection) curve** — `make_forecast_curve(base, basis)` in
+`include/tbp/curve.hpp`
+
+- A second `DiscountCurve` with its own grad leaf: same node times, zeros =
+  base zeros + additive basis. `forward_rate(t0, t1)` returns the
+  simple-compounded forward `(DF(t0)/DF(t1) - 1)/(t1 - t0)` used to project
+  floating coupons. Discount risk and projection risk separate cleanly in
+  autograd because the two curves are distinct leaves.
+
+**FloatingRateNote (Treasury FRN)** — `include/tbp/frn.hpp`
+
+- Quarterly coupons = index + quoted spread; the index is the highest accepted
+  discount rate of the most recent 13-week bill auction (resets weekly; v0
+  fixes the current period at `current_index`). Dual-curve pricing: coupons
+  projected off the forecast curve, discounted off the discount curve plus a
+  **discount margin** (the FRN's quoted valuation spread).
+- The telescoping identity `sum(DF(t_{i-1}) - DF(t_i)) = 1 - DF(T)` means a
+  spread-free FRN with forecast == discount reprices exactly to face at a
+  reset — this is a unit test.
+- `analyze(frn, discount, forecast, dm)` returns dirty/clean PV, accrued,
+  rate DV01 (tiny, by design of a floater), DM DV01 (sized like a fixed bond
+  of the same maturity), and key-rate DV01 per node of *each* curve.
+- Market quotes: `python/fetch_frn.py` pulls index + quoted spread per
+  outstanding CUSIP from the Treasury Fiscal Data "FRN Daily Indexes" API into
+  `data/curves/frn_latest.csv`.
+
 ## 3. Sector dimension (Treasury → Agency → …)
 
 A sector is modelled as an **additive spread** on the Treasury zero curve. Today
@@ -76,6 +102,11 @@ schema.
   options (callable agencies) are introduced.
 - **No options.** Callable/putable need a short-rate lattice or Monte Carlo;
   keep that behind a separate module so the option-free path stays simple.
+- **FRN approximations.** Current coupon fully fixed at today's index (real
+  TFRNs reset weekly within the period, lagged by the auction schedule);
+  accrual in year-fractions rather than ACT/360 daily; bill discount rate
+  converted to cc with a flat 0.25y period. Refine alongside the calendar
+  work.
 
 ## 6. Validation ideas
 

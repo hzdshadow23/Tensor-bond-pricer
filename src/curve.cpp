@@ -38,6 +38,21 @@ torch::Tensor DiscountCurve::discount(const torch::Tensor& t) const {
     return torch::exp(-zero_rate(tt) * tt);
 }
 
+torch::Tensor DiscountCurve::forward_rate(const torch::Tensor& t0,
+                                          const torch::Tensor& t1) const {
+    auto a = t0.to(kF64);
+    auto b = t1.to(kF64);
+    auto tau = b - a;
+    return (discount(a) / discount(b) - 1.0) / tau;
+}
+
+DiscountCurve make_forecast_curve(const DiscountCurve& base, double basis) {
+    // detach() here is safe and intentional: it happens at construction time,
+    // not inside a pricing path. The new curve gets its own grad leaf.
+    auto zeros = base.node_zeros().detach().clone() + basis;
+    return DiscountCurve(base.node_times().clone(), zeros);
+}
+
 DiscountCurve DiscountCurve::bootstrap_from_par(const torch::Tensor& tenors_in,
                                                 const torch::Tensor& par_in,
                                                 int freq) {

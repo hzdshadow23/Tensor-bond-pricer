@@ -20,10 +20,12 @@ library directly and needs no Python at runtime.
 ## Scope (deliberately small first)
 
 - **In scope now:** U.S. **Treasury** and **Agency** bonds, **option-free /
-  bullet only** (non-callable, non-putable), fixed coupon.
+  bullet only** (non-callable, non-putable), fixed coupon; **Treasury FRNs**
+  (2y floaters indexed to the 13-week bill) priced dual-curve
+  (discount + forecast) with a discount margin.
 - **Later (do not build yet unless asked):** callable agencies, **muni**,
-  **corporate**, floaters, option-adjusted spread / lattice models, full
-  calendar & day-count conventions, intraday data.
+  **corporate**, non-Treasury floaters, option-adjusted spread / lattice
+  models, full calendar & day-count conventions, intraday data.
 
 When asked to extend scope, prefer adding a new sector spread curve or a new
 `fetch_*.py` over changing the core tensor math.
@@ -32,18 +34,23 @@ When asked to extend scope, prefer adding a new sector spread curve or a new
 
 ```
 include/tbp/     Public headers
-  curve.hpp        DiscountCurve: nodes as tensors, interp, discount, bootstrap
+  curve.hpp        DiscountCurve: nodes as tensors, interp, discount, bootstrap,
+                   forward_rate(); make_forecast_curve() for projection curves
   bond.hpp         FixedRateBond + price() + analyze() (autograd risk)
+  frn.hpp          Treasury FRN: dual-curve pricing + discount margin + risk
   schedule.hpp     coupon time generation (v0 works in year-fractions)
 src/
-  curve.cpp        curve + par->zero bootstrap
+  curve.cpp        curve + par->zero bootstrap + forecast-curve builder
   bond.cpp         pricing + autograd DV01 / key-rate risk
-  main.cpp         demo: load par curve -> bootstrap -> price UST + Agency
+  frn.cpp          FRN pricing/risk (separate module, off the fixed-rate path)
+  main.cpp         demo: load par curve -> bootstrap -> price UST + Agency + TFRN
 tests/
   test_pricing.cpp dependency-free sanity checks (ctest)
 python/
   fetch_treasury.py  daily par-curve fetcher (stdlib only), writes data/curves/
-data/curves/       CSV cache: latest.csv, tenors.csv, treasury_par_YYYY.csv
+  fetch_frn.py       TFRN quotes (index + spread per CUSIP) from fiscaldata API
+data/curves/       CSV cache: latest.csv, tenors.csv, frn_latest.csv,
+                   treasury_par_YYYY.csv
 docs/
   tensor_curve_framework.md   design + math + roadmap
 CMakeLists.txt     find_package(Torch); builds lib, demo, tests
@@ -57,9 +64,10 @@ CMakeLists.txt     find_package(Torch); builds lib, demo, tests
 # 2. Configure + build
 cmake -DCMAKE_PREFIX_PATH=/abs/path/to/libtorch -B build -S .
 cmake --build build -j
-# 3. Refresh today's curve, then price
+# 3. Refresh today's curve + FRN quotes, then price
 python3 python/fetch_treasury.py
-./build/price_bonds data/curves/latest.csv data/curves/tenors.csv
+python3 python/fetch_frn.py
+./build/price_bonds data/curves/latest.csv data/curves/tenors.csv data/curves/frn_latest.csv
 # 4. Tests
 cd build && ctest --output-on-failure
 ```
@@ -74,6 +82,10 @@ no API key, no signup). `python/fetch_treasury.py` parses it to a tidy CSV with
 tenor columns `1M..30Y` (percent). `tenors.csv` maps each label to its
 year-fraction so C++ never hard-codes the grid. Only daily granularity is
 needed; there is no intraday path.
+
+TFRN quotes come from the **Treasury Fiscal Data "FRN Daily Indexes" API**
+(JSON, no key): `python/fetch_frn.py` writes one row per outstanding FRN CUSIP
+(maturity, quoted spread, current 13-week bill index) to `frn_latest.csv`.
 
 Agency-specific and FRED (needs a free key) fetchers are future siblings that
 must emit the **same CSV schema**.
