@@ -1,0 +1,4 @@
+# The fetcher itself uses only the Python standard library, so this file is
+# optional. These are conveniences for exploration / plotting in PyCharm.
+pandas>=2.0
+matplotlib>=3.7

@@ -1,0 +1,23 @@
+# Build
+/build/
+/cmake-build-*/
+*.o
+*.obj
+
+# libtorch (download separately; do not commit)
+/libtorch/
+/third_party/libtorch/
+
+# Data cache (keep tenors.csv + a sample; ignore bulk history)
+/data/curves/treasury_par_*.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.user

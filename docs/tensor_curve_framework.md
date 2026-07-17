@@ -1,0 +1,103 @@
+# Tensor Curve Framework — design notes
+
+*张量曲线框架设计文档 — 见文末中文小结。*
+
+## 1. Why "tensor"
+
+Everything in the pricing path is a libtorch tensor so that two things come for
+free:
+
+1. **Vectorized pricing.** A portfolio of bonds is a set of (times, cashflows)
+   tensors; pricing is a couple of elementwise ops and a reduction. Batching
+   over bonds, curves, or scenarios is just adding a leading dimension.
+2. **Analytic risk via autograd.** The curve's node zero rates are a
+   differentiable leaf tensor. Any price is a function of that tensor, so
+   `torch::autograd::grad(PV, node_zeros)` returns **key-rate (bucketed) DV01**
+   directly — exact to machine precision, no bump-and-reprice.
+
+This mirrors how you'd build a differentiable pricer in Python PyTorch, but in
+C++ (libtorch) for deployment. Same ATen/autograd engine underneath.
+
+## 2. Objects
+
+**DiscountCurve** — `include/tbp/curve.hpp`
+
+- State: `node_times` `[N]` (years, no grad) and `node_zeros` `[N]`
+  (continuously-compounded zero rates, `requires_grad = true`).
+- `zero_rate(t)`: linear interpolation in zero-rate space, flat extrapolation
+  past the ends. Differentiable w.r.t. every node.
+- `discount(t) = exp(-zero_rate(t) * t)`.
+- `bootstrap_from_par(tenors, par_yields, freq)`: standard sequential par
+  bootstrap. Points below one coupon period are treated as simple money-market
+  zeros; longer points are par bonds solved node-by-node, sweeping the grid a
+  few times so the interpolation used for intermediate coupons is self-consistent.
+
+**FixedRateBond** — `include/tbp/bond.hpp`
+
+- Bullet, fixed coupon, option-free. Emits aligned `times()` and `cashflows()`
+  tensors (final cashflow includes redemption).
+- `price(bond, curve, spread)` = `sum(cf * exp(-(z(t)+spread) * t))`.
+- `analyze(bond, curve, spread)` returns PV, parallel DV01, modified duration,
+  and per-node key-rate DV01 via autograd.
+
+## 3. Sector dimension (Treasury → Agency → …)
+
+A sector is modelled as an **additive spread** on the Treasury zero curve. Today
+that spread is a scalar placeholder (`+25bp` for agency in the demo). The natural
+generalization is a spread *curve* per sector, giving a `[n_sectors, n_nodes]`
+tensor — the "tensor curve" surface. Muni and corporate slot in as further rows,
+each with its own spread curve (and, eventually, its own credit/tax adjustments).
+
+## 4. Data pipeline
+
+```
+treasury.gov XML  ──►  python/fetch_treasury.py  ──►  data/curves/latest.csv
+                                                        data/curves/tenors.csv
+                                                              │
+                                                              ▼
+                              main.cpp loads CSV ──► bootstrap_from_par ──► price/analyze
+```
+
+Daily granularity only. Additional sources (FRED for agency spreads, EMMA/MSRB
+for muni, TRACE for corporate) attach as sibling `fetch_*.py` writing the same
+schema.
+
+## 5. Known simplifications in v0 (roadmap)
+
+- **Time = year-fractions**, not calendar dates. Add `Date`, day-count
+  (ACT/ACT, 30/360), business-day rolls, and accrued interest for clean/dirty
+  price split.
+- **Interpolation** is linear-in-zero. Consider log-linear on discount factors
+  or monotone-convex; a **tensor-product spline** across (tenor × sector) is the
+  eventual home for the "tensor curve" name.
+- **Bootstrap** assumes par instruments on the published grid. Real desks fit to
+  actual on-the-run/auctioned issues.
+- **Sector spread** is flat; move to a fitted spread curve, then OAS once
+  options (callable agencies) are introduced.
+- **No options.** Callable/putable need a short-rate lattice or Monte Carlo;
+  keep that behind a separate module so the option-free path stays simple.
+
+## 6. Validation ideas
+
+- Reprice par bonds → ~100 (in `tests/`).
+- Key-rate DV01s sum to parallel DV01 (in `tests/`).
+- Cross-check PV/duration against QuantLib or a spreadsheet for a few known bonds
+  before trusting the engine on new instruments.
+
+---
+
+## 中文小结
+
+本框架用 libtorch（PyTorch 的 C++ 版，底层是同一套 ATen/autograd 引擎，并非对
+Python 的封装）把**贴现曲线**和**债券现金流**都表示为张量，从而获得两大好处：
+
+1. **向量化定价**：一组债券即一组 (时间, 现金流) 张量，定价就是逐元素运算加求和，
+   天然支持对债券/曲线/情景做批处理。
+2. **自动微分求风险**：曲线节点零息利率是可微叶子张量，价格对其求梯度即得**关键
+   期限 DV01（分桶敏感度）**，精确且无需扰动重定价。
+
+当前范围：美国**国债与机构债**、**无期权（子弹型、不可赎回）**、固定票息。
+市政债、公司债、可赎回债为后续工作。数据源：treasury.gov 每日国债到期收益率
+曲线（XML，无需 API key），仅需日频。板块（国债→机构债→…）用**加性利差**建模，
+未来扩展为 `[板块, 节点]` 的利差曲线张量面。v0 用「距估值日的年数」而非日历日期，
+日历/计息惯例、样条插值、利差曲线、期权（格点/蒙特卡洛）均列入路线图。
