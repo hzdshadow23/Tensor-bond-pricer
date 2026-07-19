@@ -43,6 +43,21 @@ C++ (libtorch) for deployment. Same ATen/autograd engine underneath.
   at the instruments' true maturities (e.g. 19.83y for the current 20Y), so
   key-rate risk buckets line up with the hedge instruments themselves.
 
+**Named curves + CurveStore** — `include/tbp/core/curve_store.hpp`
+
+- A curve is a first-class **named object**, not csv state: `YC_<SECTOR>` for
+  discount curves (`YC_TSY` = the instrument-quote Treasury curve,
+  `YC_TSY_PAR` = the par-grid build; `YC_MUNI` / `YC_CORP` reserved for the
+  sector roadmap) and `FC_<SECTOR>` for forecast curves (`FC_TSY`).
+- `CurveStore` is the registry: `add(curve)` keys by `curve.name()`,
+  `get("YC_TSY")` returns a reference, so every user prices off the same
+  differentiable `node_zeros` leaf and key-rate risk stays consistent.
+- Persistence is a native libtorch archive (`curve.save("YC_TSY.pt")` /
+  `DiscountCurve::load`), round-tripping node times, zeros and name exactly;
+  the loaded curve gets a fresh grad leaf. The CSVs under `data/curves/` are
+  only the fetchers' raw quote cache — the bootstrapped curve itself is never
+  written to csv.
+
 **FixedRateBond** — `include/tbp/bond.hpp`
 
 - Bullet, fixed coupon, option-free. Emits aligned `times()` and `cashflows()`

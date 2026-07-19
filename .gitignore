@@ -10,6 +10,8 @@
 
 # Data cache (keep tenors.csv + a sample; ignore bulk history)
 /data/curves/treasury_par_*.csv
+# Persisted curve objects (rebuilt daily by price_bonds from the quote cache)
+/data/curves/*.pt
 
 # Python
 __pycache__/

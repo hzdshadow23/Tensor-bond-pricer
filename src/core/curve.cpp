@@ -8,14 +8,35 @@ namespace {
 constexpr auto kF64 = torch::kFloat64;
 }  // namespace
 
-DiscountCurve::DiscountCurve(torch::Tensor node_times, torch::Tensor node_zeros)
+DiscountCurve::DiscountCurve(torch::Tensor node_times, torch::Tensor node_zeros,
+                             std::string name)
     : node_times_(node_times.to(kF64).contiguous()),
-      node_zeros_(node_zeros.to(kF64).contiguous()) {
+      node_zeros_(node_zeros.to(kF64).contiguous()),
+      name_(std::move(name)) {
     if (node_times_.dim() != 1 || node_zeros_.dim() != 1 ||
         node_times_.size(0) != node_zeros_.size(0)) {
         throw std::invalid_argument("node_times and node_zeros must be 1-D, same length");
     }
     node_zeros_.set_requires_grad(true);
+}
+
+void DiscountCurve::save(const std::string& path) const {
+    torch::serialize::OutputArchive ar;
+    ar.write("node_times", node_times_);
+    ar.write("node_zeros", node_zeros_.detach());  // grad leaf is rebuilt on load
+    ar.write("name", c10::IValue(name_));
+    ar.save_to(path);
+}
+
+DiscountCurve DiscountCurve::load(const std::string& path) {
+    torch::serialize::InputArchive ar;
+    ar.load_from(path);
+    torch::Tensor times, zeros;
+    ar.read("node_times", times);
+    ar.read("node_zeros", zeros);
+    c10::IValue name;
+    ar.read("name", name);
+    return DiscountCurve(times, zeros, name.toStringRef());
 }
 
 torch::Tensor DiscountCurve::zero_rate(const torch::Tensor& t) const {

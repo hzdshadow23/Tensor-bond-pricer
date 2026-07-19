@@ -3,8 +3,10 @@
 #include <torch/torch.h>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 
 #include "tbp/core/curve.hpp"
+#include "tbp/core/curve_store.hpp"
 #include "tbp/instruments/bond.hpp"
 #include "tbp/instruments/frn.hpp"
 
@@ -156,6 +158,36 @@ int main() {
               "20y mod duration in [10,15]");
         CHECK(r30.mod_duration > 13.0 && r30.mod_duration < 19.0,
               "30y mod duration in [13,19]");
+    }
+
+    // 8) Named curve objects: a curve persists as a native libtorch archive
+    //    (not csv) and round-trips exactly; CurveStore hands back a reference
+    //    to the registered object by name.
+    {
+        auto t = torch::tensor({0.5, 2.0, 10.0}, f64);
+        auto z = torch::tensor({0.040, 0.042, 0.046}, f64);
+        DiscountCurve c(t, z, "YC_TSY_TEST");
+        const char* path = "yc_tsy_test.pt";
+        c.save(path);
+        auto loaded = DiscountCurve::load(path);
+        std::remove(path);
+
+        CHECK(loaded.name() == "YC_TSY_TEST", "curve name survives save/load");
+        double dz = (loaded.node_zeros() - c.node_zeros()).abs().max().item<double>();
+        double dt = (loaded.node_times() - c.node_times()).abs().max().item<double>();
+        CHECK(dz == 0.0 && dt == 0.0, "curve nodes survive save/load exactly");
+        CHECK(loaded.node_zeros().requires_grad(), "loaded curve is a fresh grad leaf");
+
+        CurveStore store;
+        store.add(loaded);
+        FixedRateBond b{100.0, 0.04, 2, 10.0};
+        double pv_store = price(b, store.get("YC_TSY_TEST")).item<double>();
+        double pv_direct = price(b, c).item<double>();
+        CHECK(close(pv_store, pv_direct, 1e-12), "pricing off store lookup == direct");
+
+        bool threw = false;
+        try { store.get("YC_MUNI"); } catch (const std::out_of_range&) { threw = true; }
+        CHECK(threw, "unknown curve name throws with known names listed");
     }
 
     std::printf("\n%s (%d failure(s))\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED", failures);

@@ -39,7 +39,10 @@ include/tbp/          Public headers (src/ mirrors this tree)
   core/curve.hpp        DiscountCurve: nodes as tensors, interp, discount,
                         forward_rate(); bootstrap_from_par (published par grid),
                         bootstrap_from_quotes (actual on-the-run instruments);
-                        make_forecast_curve() for projection curves
+                        make_forecast_curve() for projection curves; named
+                        (e.g. "YC_TSY") + save()/load() as a libtorch archive
+  core/curve_store.hpp  CurveStore: named curve registry (YC_TSY today,
+                        YC_MUNI / YC_CORP later; FC_* for forecast curves)
   core/schedule.hpp     coupon time generation (v0 works in year-fractions)
   instruments/bond.hpp  FixedRateBond + price() + analyze() (autograd risk)
   instruments/frn.hpp   Treasury FRN: dual-curve pricing + discount margin + risk
@@ -59,8 +62,11 @@ python/
   fetch_frn.py          TFRN quotes (index + spread per CUSIP, fiscaldata API)
   fetch_securities.py   on-the-run bill/note/bond daily quotes (TA_WS +
                         bill-rates feed + CMT) -> securities_latest.csv
-data/curves/          CSV cache: latest.csv, tenors.csv, frn_latest.csv,
-                      securities_latest.csv, treasury_par_YYYY.csv
+data/curves/          raw quote cache (CSV): latest.csv, tenors.csv,
+                      frn_latest.csv, securities_latest.csv,
+                      treasury_par_YYYY.csv; plus persisted curve OBJECTS
+                      (YC_TSY.pt, libtorch archive, gitignored — the curve
+                      itself is never stored as csv)
 docs/
   tensor_curve_framework.md   design + math + roadmap
 CMakeLists.txt        find_package(Torch); builds lib, demo, tests
@@ -126,6 +132,11 @@ must emit the **same CSV schema**.
   `.item()`, `.detach()`, or `.to()` inside the pricing path or you break the
   autograd graph that key-rate risk depends on.
 - DV01 sign convention: **positive DV01 = loss for a +1bp rate rise.**
+- Curves are **named objects**: `YC_<SECTOR>` for discount curves (`YC_TSY`;
+  `YC_TSY_PAR` for the par-grid build; future `YC_MUNI`, `YC_CORP`),
+  `FC_<SECTOR>` for forecast curves. Register/look up via `CurveStore`;
+  persist with `curve.save()/DiscountCurve::load()` (`.pt`), never as csv —
+  csv is only for raw fetched quotes.
 - v0 measures time in **year-fractions from valuation**, not calendar dates.
   Adding real day-count/business-day logic is a scoped task in `docs/`.
 

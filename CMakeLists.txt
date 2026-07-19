@@ -18,6 +18,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 #   io          CSV loaders for the data/curves cache (std-only, no torch)
 add_library(tbp
     src/core/curve.cpp
+    src/core/curve_store.cpp
     src/instruments/bond.cpp
     src/instruments/frn.cpp
     src/io/csv.cpp

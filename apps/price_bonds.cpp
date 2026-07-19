@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "tbp/core/curve.hpp"
+#include "tbp/core/curve_store.hpp"
 #include "tbp/instruments/bond.hpp"
 #include "tbp/instruments/frn.hpp"
 #include "tbp/io/csv.hpp"
@@ -48,9 +49,11 @@ int main(int argc, char** argv) {
     auto tenors = torch::tensor(years, torch::kFloat64);
     auto par    = torch::tensor(pars, torch::kFloat64);
     auto curve  = tbp::DiscountCurve::bootstrap_from_par(tenors, par, /*freq=*/2);
+    curve.set_name("YC_TSY_PAR");
+    tbp::CurveStore::instance().add(curve);
 
-    std::printf("Valuation curve: %s  (%lld nodes)\n", date.c_str(),
-                static_cast<long long>(curve.size()));
+    std::printf("Valuation curve: %s = %s  (%lld nodes)\n", curve.name().c_str(),
+                date.c_str(), static_cast<long long>(curve.size()));
 
     // Treasury 4% 10y, semiannual, option-free.
     tbp::FixedRateBond ust{100.0, 0.04, 2, 10.0};
@@ -76,6 +79,8 @@ int main(int argc, char** argv) {
     double z3m = curve.zero_rate(q3m).item<double>();
     double z_index = -std::log(1.0 - q.index_rate * 0.25) / 0.25;  // bill discount rate -> cc
     auto fcst = tbp::make_forecast_curve(curve, z_index - z3m);
+    fcst.set_name("FC_TSY");
+    tbp::CurveStore::instance().add(fcst);
 
     tbp::FloatingRateNote frn{100.0, q.spread, 4, q.maturity_years, q.index_rate};
     auto fr = tbp::analyze(frn, curve, fcst, /*discount_margin=*/0.0);
@@ -105,13 +110,21 @@ int main(int argc, char** argv) {
             c.push_back(s.coupon);
             y.push_back(s.quote_yield);
         }
-        auto icurve = tbp::DiscountCurve::bootstrap_from_quotes(
+        auto built = tbp::DiscountCurve::bootstrap_from_quotes(
             torch::tensor(m, torch::kFloat64), torch::tensor(c, torch::kFloat64),
             torch::tensor(y, torch::kFloat64), /*freq=*/2);
+        built.set_name("YC_TSY");
 
-        std::printf("\nInstrument curve: %s, bootstrapped from %zu on-the-run "
-                    "securities\n  %-8s %-9s  %9s %8s %9s\n",
-                    sec_date.c_str(), secs.size(),
+        // The curve is a named object, not csv state: persist it as a native
+        // libtorch archive and register it; downstream pricing looks it up by
+        // name (YC_MUNI / YC_CORP will slot in beside it later).
+        built.save("data/curves/YC_TSY.pt");
+        tbp::CurveStore::instance().add(tbp::DiscountCurve::load("data/curves/YC_TSY.pt"));
+        auto& icurve = tbp::CurveStore::instance().get("YC_TSY");
+
+        std::printf("\n%s: %s, bootstrapped from %zu on-the-run securities, "
+                    "saved to data/curves/YC_TSY.pt\n  %-8s %-9s  %9s %8s %9s\n",
+                    icurve.name().c_str(), sec_date.c_str(), secs.size(),
                     "term", "cusip", "maturity", "quote%", "zero%");
         for (size_t i = 0; i < secs.size(); ++i)
             std::printf("  %-8s %-9s  %8.3fy %8.3f %9.4f\n",
@@ -131,8 +144,13 @@ int main(int argc, char** argv) {
             print_report(name, tbp::analyze(b, icurve, /*spread=*/0.0), icurve);
         }
     } else {
-        std::printf("\nInstrument curve: no securities CSV given, skipped\n");
+        std::printf("\nYC_TSY: no securities CSV given, skipped\n");
     }
+
+    std::printf("\nRegistered curves:");
+    for (const auto& n : tbp::CurveStore::instance().names())
+        std::printf(" %s", n.c_str());
+    std::printf("\n");
 
     return 0;
 }
