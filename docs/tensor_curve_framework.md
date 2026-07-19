@@ -45,10 +45,20 @@ C++ (libtorch) for deployment. Same ATen/autograd engine underneath.
 
 **Named curves + CurveStore** — `include/tbp/core/curve_store.hpp`
 
-- A curve is a first-class **named object**, not csv state: `YC_<SECTOR>` for
-  discount curves (`YC_TSY` = the instrument-quote Treasury curve,
-  `YC_TSY_PAR` = the par-grid build; `YC_MUNI` / `YC_CORP` reserved for the
-  sector roadmap) and `FC_<SECTOR>` for forecast curves (`FC_TSY`).
+- A curve is a first-class **named object**, not csv state. The prefix encodes
+  the curve **type**; `tbp::curves` holds the well-known names as constants:
+
+  | Type | Prefix | Today | Reserved placeholders |
+  |---|---|---|---|
+  | Discount (yield) curve | `YC_` | `YC_TSY` (from on-the-run quotes), `YC_TSY_PAR` (published par grid) | `YC_MUNI`, `YC_CORP` |
+  | Forecast (projection) curve | `FC_` | `FC_TSY` (TFRN 13-week-bill index) | `FC_SOFR` (corporate floaters) |
+  | Real-yield curve (TIPS) | `YC_*_REAL` | — | `YC_TSY_REAL` |
+  | Fitted sector spread curve | (roadmap) | flat scalar spread today | per-sector spread curves over `YC_TSY` |
+
+  Forecast curves are separate objects with their own grad leaf on purpose:
+  discount risk and projection risk separate cleanly in autograd. A real-yield
+  curve is the same `DiscountCurve` machinery bootstrapped from TIPS quotes —
+  it unlocks the `TIPS` placeholder in the treasury taxonomy.
 - `CurveStore` is the registry: `add(curve)` keys by `curve.name()`,
   `get("YC_TSY")` returns a reference, so every user prices off the same
   differentiable `node_zeros` leaf and key-rate risk stays consistent.
@@ -57,6 +67,40 @@ C++ (libtorch) for deployment. Same ATen/autograd engine underneath.
   the loaded curve gets a fresh grad leaf. The CSVs under `data/curves/` are
   only the fetchers' raw quote cache — the bootstrapped curve itself is never
   written to csv.
+
+**Conventions layer** — `include/tbp/core/conventions.hpp` (header-only, no torch)
+
+The pricing path deliberately stays in year-fractions (differentiable,
+batched); this layer is where the year-fractions come **from**:
+
+- `Date` (proleptic Gregorian, Hinnant serial arithmetic), weekday, ISO parse.
+- **Holiday calendar**: US federal holidays with Sat→Fri / Sun→Mon observance
+  (SIFMA Good Friday is a scoped follow-up); `is_business_day`.
+- **Business-day rolls**: FOLLOWING, MODIFIED_FOLLOWING, PRECEDING.
+- **End-of-month rule** in `add_months` (month-end stays month-end).
+- **Day counts**: ACT/360, ACT/365F, 30/360 US; ACT/ACT ≈ ACT/365.25 in v0.
+- `build_coupon_dates(valuation, maturity, freq, eom, roll, cal)`: pay
+  schedule counted back from maturity (front stub lands at the valuation
+  end), EOM + holiday-rolled; `year_fractions()` converts it to the tensor
+  engine's times.
+
+Every instrument carries a `BondTerms {day_count, roll, eom, calendar}`;
+floaters add `FloatingTerms {resets_per_year, reset_weekday, lockout_days}`
+(the TFRN: weekly resets, Thursday-effective, 2-day lockout — declared now,
+projected exactly as the calendar work deepens).
+
+**Sector taxonomy** — `include/tbp/instruments/<sector>/`
+
+Every instrument is a *bond*; the taxonomy is sector first, then product type
+mapped to a pricing engine (fixed cashflows → `FixedRateBond`, floating →
+`FloatingRateNote`):
+
+- `treasury/treasury.hpp`: `TBill` (zero-coupon), `TNote` (2–10Y), `TBond`
+  (20/30Y), `TFRN` (2Y floater), `TIPS` placeholder (needs `YC_TSY_REAL`; no
+  `price()` overload yet by design so it can't be mispriced off the nominal
+  curve).
+- `muni/muni.hpp`, `corporate/corporate.hpp`: placeholder headers documenting
+  what unlocks each sector (`YC_MUNI` / `YC_CORP` + conventions).
 
 **FixedRateBond** — `include/tbp/bond.hpp`
 
@@ -127,9 +171,12 @@ schema.
 
 ## 5. Known simplifications in v0 (roadmap)
 
-- **Time = year-fractions**, not calendar dates. Add `Date`, day-count
-  (ACT/ACT, 30/360), business-day rolls, and accrued interest for clean/dirty
-  price split.
+- **Time = year-fractions** in the pricing path. The conventions layer
+  (`core/conventions.hpp`: `Date`, day counts, holiday calendar, rolls, EOM,
+  date-based schedules) now produces those year-fractions from real terms;
+  next steps are wiring instrument constructors to take calendar dates
+  directly, ACT/ACT ISDA period-splitting (v0 approximates 365.25), SIFMA
+  Good Friday, and a date-based accrued-interest clean/dirty split.
 - **Interpolation** is linear-in-zero. Consider log-linear on discount factors
   or monotone-convex; a **tensor-product spline** across (tenor × sector) is the
   eventual home for the "tensor curve" name.

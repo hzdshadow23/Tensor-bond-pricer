@@ -5,10 +5,12 @@
 #include <cstdio>
 #include <stdexcept>
 
+#include "tbp/core/conventions.hpp"
 #include "tbp/core/curve.hpp"
 #include "tbp/core/curve_store.hpp"
 #include "tbp/instruments/bond.hpp"
 #include "tbp/instruments/frn.hpp"
+#include "tbp/instruments/treasury/treasury.hpp"
 
 static int failures = 0;
 #define CHECK(cond, msg)                                                    \
@@ -188,6 +190,70 @@ int main() {
         bool threw = false;
         try { store.get("YC_MUNI"); } catch (const std::out_of_range&) { threw = true; }
         CHECK(threw, "unknown curve name throws with known names listed");
+    }
+
+    // 9) Conventions layer: dates, holidays, business-day rolls, day counts,
+    //    EOM rule, and date-based coupon schedules.
+    {
+        // Date arithmetic round-trips through the serial representation.
+        Date d{2026, 7, 17};
+        CHECK(Date::from_serial(d.serial()) == d, "date <-> serial round-trip");
+        CHECK(Date::from_iso(d.iso()) == d, "date <-> iso round-trip");
+        CHECK(d.weekday() == Weekday::Fri, "2026-07-17 is a Friday");
+
+        // July 4 2026 is a Saturday -> observed Friday 2026-07-03 is a holiday.
+        CHECK((Date{2026, 7, 4}.weekday() == Weekday::Sat), "2026-07-04 is a Saturday");
+        CHECK((!is_business_day(Date{2026, 7, 3})), "observed July 4th (Fri) not a business day");
+        CHECK((is_us_holiday(Date{2026, 11, 26})), "Thanksgiving 2026 = Nov 26");
+        CHECK((is_business_day(Date{2026, 7, 17})), "a plain Friday is a business day");
+
+        // Rolls: Sat 2026-07-04 -> FOLLOWING = Mon 7/6; month-end Sat
+        // 2026-10-31 -> MODIFIED_FOLLOWING rolls BACK to Fri 10/30.
+        CHECK((adjust(Date{2026, 7, 4}, BusinessDayRoll::FOLLOWING) == Date{2026, 7, 6}),
+              "FOLLOWING rolls Sat to Mon");
+        CHECK((adjust(Date{2026, 10, 31}, BusinessDayRoll::MODIFIED_FOLLOWING) ==
+                  Date{2026, 10, 30}),
+              "MODIFIED_FOLLOWING stays in month at month-end");
+
+        // End-of-month rule vs plain clamping.
+        CHECK((Date{2026, 1, 31}.add_months(1) == Date{2026, 2, 28}),
+              "add_months clamps to month length");
+        CHECK((Date{2026, 4, 30}.add_months(1, /*eom=*/true) == Date{2026, 5, 31}),
+              "EOM rule: month-end stays month-end");
+        CHECK((Date{2026, 4, 30}.add_months(1, /*eom=*/false) == Date{2026, 5, 30}),
+              "no EOM: day-of-month kept");
+
+        // Day counts.
+        CHECK((close(year_fraction(Date{2026, 1, 30}, Date{2026, 7, 30},
+                                   DayCount::THIRTY_360), 0.5, 1e-12)),
+              "30/360: Jan 30 -> Jul 30 = 0.5y");
+        CHECK((close(year_fraction(Date{2026, 1, 1}, Date{2027, 1, 1},
+                                   DayCount::ACT_360), 365.0 / 360.0, 1e-12)),
+              "ACT/360: one non-leap year = 365/360");
+
+        // Date-based schedule for the on-the-run 30Y (5% 2056-05-15) as seen
+        // from 2026-07-17: 60 semiannual payments, first on 2026-11-16
+        // (Nov 15 is a Sunday -> MODIFIED_FOLLOWING), last at maturity.
+        tbp::treasury::TBond b30{100.0, 0.05, 2, 29.83};
+        auto pay = build_coupon_dates(Date{2026, 7, 17}, Date{2056, 5, 15}, b30.freq,
+                                      b30.terms.eom, b30.terms.roll, b30.terms.calendar);
+        CHECK(pay.size() == 60, "30Y bond: 60 remaining semiannual payments");
+        CHECK((pay.front() == Date{2026, 11, 16}), "first coupon rolled off Sunday Nov 15");
+        CHECK((pay.back() == Date{2056, 5, 15}), "final payment at maturity");
+        auto yf = year_fractions(Date{2026, 7, 17}, pay, b30.terms.day_count);
+        bool ascending = true;
+        for (size_t i = 1; i < yf.size(); ++i) ascending &= yf[i] > yf[i - 1];
+        CHECK(ascending && yf.back() > 29.7 && yf.back() < 29.95,
+              "year-fractions ascending, maturity ~29.83y (feeds the tensor engine)");
+
+        // Taxonomy: trailing terms defaulted, aggregate init unchanged; the
+        // TFRN carries ACT/360 accrual + weekly reset terms.
+        tbp::treasury::TFRN tfrn{100.0, 0.00103, 4, 1.79, 0.0380};
+        CHECK(tfrn.sector == Sector::Treasury && tfrn.terms.day_count == DayCount::ACT_360 &&
+                  tfrn.floating.resets_per_year == 52,
+              "TFRN defaults: Treasury sector, ACT/360, weekly resets");
+        auto bill = tbp::treasury::make_bill(100.0, 0.25);
+        CHECK(bill.coupon_rate == 0.0, "T-bill is a zero-coupon FixedRateBond");
     }
 
     std::printf("\n%s (%d failure(s))\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED", failures);

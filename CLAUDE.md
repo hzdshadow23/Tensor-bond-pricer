@@ -41,11 +41,23 @@ include/tbp/          Public headers (src/ mirrors this tree)
                         bootstrap_from_quotes (actual on-the-run instruments);
                         make_forecast_curve() for projection curves; named
                         (e.g. "YC_TSY") + save()/load() as a libtorch archive
-  core/curve_store.hpp  CurveStore: named curve registry (YC_TSY today,
-                        YC_MUNI / YC_CORP later; FC_* for forecast curves)
+  core/curve_store.hpp  CurveStore: named curve registry + tbp::curves name
+                        constants (YC_TSY today; reserved YC_MUNI, YC_CORP,
+                        YC_TSY_REAL, FC_SOFR; FC_* for forecast curves)
+  core/conventions.hpp  header-only, no torch: Date, US holiday calendar,
+                        business-day rolls, EOM rule, day counts (ACT/360,
+                        ACT/365F, 30/360; ACT/ACT~365.25 v0),
+                        build_coupon_dates()/year_fractions() -> feeds the
+                        year-fraction tensor engine from real dates
   core/schedule.hpp     coupon time generation (v0 works in year-fractions)
-  instruments/bond.hpp  FixedRateBond + price() + analyze() (autograd risk)
-  instruments/frn.hpp   Treasury FRN: dual-curve pricing + discount margin + risk
+  instruments/bond.hpp  Sector enum + BondTerms (day count/roll/EOM/calendar)
+                        + FixedRateBond + price() + analyze() (autograd risk)
+  instruments/frn.hpp   Treasury FRN: dual-curve pricing + discount margin +
+                        risk; FloatingTerms (reset freq/weekday/lockout)
+  instruments/treasury/treasury.hpp  Treasury taxonomy: TBill/TNote/TBond/
+                        TFRN aliases + TIPS placeholder (needs YC_TSY_REAL)
+  instruments/muni/     placeholder headers documenting what unlocks each
+  instruments/corporate/  sector (YC_MUNI / YC_CORP + conventions)
   io/csv.hpp            loaders for the data/curves cache (std-only, no torch)
 src/
   core/curve.cpp        curve + both bootstraps + forecast-curve builder
@@ -124,6 +136,17 @@ must emit the **same CSV schema**.
 
 ## Conventions & gotchas
 
+- **`tbp` = tensor-bond-pricer**, the project namespace. Nested: `tbp::io`
+  (csv loaders), `tbp::curves` (curve name constants), `tbp::treasury` /
+  `tbp::muni` / `tbp::corporate` (sector taxonomies).
+- Every instrument is a *bond*: sector first (`Sector` enum + the
+  `instruments/<sector>/` directories), then product type mapped to a pricing
+  engine — fixed cashflows → `FixedRateBond`, floating → `FloatingRateNote`.
+  New fields on instrument structs must be **trailing members with defaults**
+  so existing aggregate init (`{100.0, 0.04, 2, 10.0}`) keeps compiling.
+- The pricing path stays in **year-fractions**; `core/conventions.hpp`
+  (BondTerms: day count, roll, EOM, calendar) is where year-fractions come
+  from. Don't push `Date` logic into the tensor math.
 - All tensors are **float64** (`torch::kFloat64`). Money math wants the
   precision; keep it consistent or autograd/interp will silently upcast.
 - Zero rates are **continuously compounded**, decimals (0.042 = 4.2%).

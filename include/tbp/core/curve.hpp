@@ -15,6 +15,11 @@
 #include <string>
 #include <vector>
 
+// `tbp` = tensor-bond-pricer, this project's namespace. All public API lives
+// in tbp:: (core curve/conventions, instruments, CurveStore), with nested
+// namespaces for subareas: tbp::io (csv quote-cache loaders), tbp::curves
+// (well-known curve names), tbp::treasury / tbp::muni / tbp::corporate
+// (sector taxonomies).
 namespace tbp {
 
 class DiscountCurve {

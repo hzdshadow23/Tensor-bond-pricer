@@ -20,8 +20,21 @@
 #include <torch/torch.h>
 #include <vector>
 #include "tbp/core/curve.hpp"
+#include "tbp/instruments/bond.hpp"  // Sector, BondTerms (an FRN IS a bond)
 
 namespace tbp {
+
+// Floating-leg reset terms. The Treasury FRN index resets with every 13-week
+// bill auction: auctioned weekly (generally Monday), effective from the
+// following issue day (generally Thursday), with a lockout before each
+// payment date. v0 pricing fixes the whole current period at `current_index`;
+// these fields DECLARE the true reset schedule so the calendar work can
+// refine the projection in place without changing the instrument's shape.
+struct FloatingTerms {
+    int resets_per_year = 52;              // weekly index resets
+    Weekday reset_weekday = Weekday::Thu;  // index effective day (bill issue)
+    int lockout_days = 2;                  // business days before payment
+};
 
 struct FloatingRateNote {
     double face = 100.0;
@@ -29,6 +42,12 @@ struct FloatingRateNote {
     int freq = 4;                 // Treasury FRNs pay quarterly
     double maturity_years = 0.0;  // years from valuation
     double current_index = 0.0;   // decimal simple rate fixed for the current period
+
+    // Trailing members with defaults keep aggregate init working. Treasury
+    // FRNs accrue ACT/360 (v0 approximates with year-fraction accrual).
+    Sector sector = Sector::Treasury;
+    BondTerms terms{DayCount::ACT_360};
+    FloatingTerms floating{};
 
     // Payment times in years from valuation, ascending, last == maturity.
     // Uses a front stub: the first payment lands < 1/freq away when the

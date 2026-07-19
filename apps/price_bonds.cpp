@@ -6,15 +6,20 @@
 //
 // If no paths are given it falls back to a small built-in par curve so the
 // binary always runs.
+//
+// `tbp` = tensor-bond-pricer, the library namespace (see tbp/core/curve.hpp):
+// tbp::DiscountCurve / tbp::CurveStore are the curve engine, tbp::treasury::*
+// the Treasury product types, tbp::io the csv quote-cache loaders,
+// tbp::curves the well-known curve names.
 #include <torch/torch.h>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+#include "tbp/core/conventions.hpp"
 #include "tbp/core/curve.hpp"
 #include "tbp/core/curve_store.hpp"
-#include "tbp/instruments/bond.hpp"
-#include "tbp/instruments/frn.hpp"
+#include "tbp/instruments/treasury/treasury.hpp"
 #include "tbp/io/csv.hpp"
 
 namespace {
@@ -55,12 +60,13 @@ int main(int argc, char** argv) {
     std::printf("Valuation curve: %s = %s  (%lld nodes)\n", curve.name().c_str(),
                 date.c_str(), static_cast<long long>(curve.size()));
 
-    // Treasury 4% 10y, semiannual, option-free.
-    tbp::FixedRateBond ust{100.0, 0.04, 2, 10.0};
+    // Treasury 4% 10y, semiannual, option-free (TNote = FixedRateBond with
+    // Treasury sector + conventions; see tbp/instruments/treasury/treasury.hpp).
+    tbp::treasury::TNote ust{100.0, 0.04, 2, 10.0};
     print_report("UST 4.00% 10y", tbp::analyze(ust, curve, /*spread=*/0.0), curve);
 
     // Agency 4% 10y priced at Treasury + 25bp (flat spread placeholder).
-    tbp::FixedRateBond agy{100.0, 0.04, 2, 10.0};
+    tbp::FixedRateBond agy{100.0, 0.04, 2, 10.0, tbp::Sector::Agency};
     print_report("Agency 4.00% 10y (+25bp)", tbp::analyze(agy, curve, /*spread=*/0.0025), curve);
 
     // --- Treasury FRN: dual-curve (discount + forecast) pricing -------------
@@ -82,7 +88,9 @@ int main(int argc, char** argv) {
     fcst.set_name("FC_TSY");
     tbp::CurveStore::instance().add(fcst);
 
-    tbp::FloatingRateNote frn{100.0, q.spread, 4, q.maturity_years, q.index_rate};
+    // A TFRN is still a bond — Treasury sector, floating coupons — so it lives
+    // in the treasury taxonomy next to TBill/TNote/TBond.
+    tbp::treasury::TFRN frn{100.0, q.spread, 4, q.maturity_years, q.index_rate};
     auto fr = tbp::analyze(frn, curve, fcst, /*discount_margin=*/0.0);
     std::printf("TFRN %s (DM = 0bp)\n"
                 "  Dirty PV      = %.4f\n  Accrued       = %.4f\n"
@@ -113,14 +121,14 @@ int main(int argc, char** argv) {
         auto built = tbp::DiscountCurve::bootstrap_from_quotes(
             torch::tensor(m, torch::kFloat64), torch::tensor(c, torch::kFloat64),
             torch::tensor(y, torch::kFloat64), /*freq=*/2);
-        built.set_name("YC_TSY");
+        built.set_name(tbp::curves::YC_TSY);
 
         // The curve is a named object, not csv state: persist it as a native
         // libtorch archive and register it; downstream pricing looks it up by
         // name (YC_MUNI / YC_CORP will slot in beside it later).
         built.save("data/curves/YC_TSY.pt");
         tbp::CurveStore::instance().add(tbp::DiscountCurve::load("data/curves/YC_TSY.pt"));
-        auto& icurve = tbp::CurveStore::instance().get("YC_TSY");
+        auto& icurve = tbp::CurveStore::instance().get(tbp::curves::YC_TSY);
 
         std::printf("\n%s: %s, bootstrapped from %zu on-the-run securities, "
                     "saved to data/curves/YC_TSY.pt\n  %-8s %-9s  %9s %8s %9s\n",
@@ -134,7 +142,7 @@ int main(int argc, char** argv) {
 
         for (const auto& s : secs) {
             if (s.type != "Bond") continue;  // the 20Y and 30Y products
-            tbp::FixedRateBond b{100.0, s.coupon, 2, s.maturity_years};
+            tbp::treasury::TBond b{100.0, s.coupon, 2, s.maturity_years};
             double model_dirty = tbp::price(b, icurve).item<double>();
             char name[160];
             std::snprintf(name, sizeof name,
@@ -142,6 +150,15 @@ int main(int argc, char** argv) {
                           s.term.c_str(), s.coupon * 100.0,
                           s.maturity_date.c_str(), s.cusip.c_str(), model_dirty);
             print_report(name, tbp::analyze(b, icurve, /*spread=*/0.0), icurve);
+
+            // Conventions layer on the real dates: coupon schedule counted
+            // back from maturity, EOM + holiday-rolled per the bond's terms.
+            auto val_date = tbp::Date::from_iso(sec_date);
+            auto pay = tbp::build_coupon_dates(val_date, tbp::Date::from_iso(s.maturity_date),
+                                               b.freq, b.terms.eom, b.terms.roll,
+                                               b.terms.calendar);
+            std::printf("  Schedule (%zu payments): next coupon %s, last %s\n",
+                        pay.size(), pay.front().iso().c_str(), pay.back().iso().c_str());
         }
     } else {
         std::printf("\nYC_TSY: no securities CSV given, skipped\n");
