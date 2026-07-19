@@ -51,6 +51,24 @@ public:
                                             const torch::Tensor& par_yields,
                                             int freq = 2);
 
+    // Bootstrap a zero curve from ACTUAL instrument quotes (the on-the-run
+    // bills / notes / bonds in data/curves/securities_latest.csv) instead of
+    // the published par grid. All inputs aligned [N], ascending maturity:
+    //   maturities : years to maturity of each security
+    //   coupons    : annual coupon rate, decimal; 0 marks a bill (zero-coupon)
+    //   yields     : quoted yield, decimal. Bills: simple money-market /
+    //                coupon-equivalent yield, DF(T) = 1/(1+y*T). Coupon
+    //                securities: street YTM, dirty price = sum of cashflows
+    //                discounted at (1+y/freq)^(-freq*t) over the front-stub
+    //                schedule counted back from maturity.
+    // Each quote is first converted to a dirty price, then node zeros are
+    // solved sequentially (with sweeps, like bootstrap_from_par) so the curve
+    // reprices every instrument to its market price.
+    static DiscountCurve bootstrap_from_quotes(const torch::Tensor& maturities,
+                                               const torch::Tensor& coupons,
+                                               const torch::Tensor& yields,
+                                               int freq = 2);
+
 private:
     torch::Tensor node_times_;  // [N], float64, no grad
     torch::Tensor node_zeros_;  // [N], float64, requires_grad

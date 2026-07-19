@@ -1,98 +1,22 @@
-// Demo driver: load the daily Treasury par curve, bootstrap a tensor discount
-// curve, and price a couple of option-free bonds with autograd risk.
+// Demo driver: load the daily Treasury market data, build tensor curves, and
+// price option-free bonds + the on-the-run TFRN, 20Y and 30Y with autograd risk.
 //
-//   ./price_bonds ../data/curves/latest.csv ../data/curves/tenors.csv
+//   ./price_bonds data/curves/latest.csv data/curves/tenors.csv \
+//                 data/curves/frn_latest.csv data/curves/securities_latest.csv
 //
 // If no paths are given it falls back to a small built-in par curve so the
 // binary always runs.
 #include <torch/torch.h>
 #include <cstdio>
-#include <fstream>
-#include <map>
-#include <sstream>
 #include <string>
 #include <vector>
 
-#include "tbp/bond.hpp"
-#include "tbp/curve.hpp"
-#include "tbp/frn.hpp"
+#include "tbp/core/curve.hpp"
+#include "tbp/instruments/bond.hpp"
+#include "tbp/instruments/frn.hpp"
+#include "tbp/io/csv.hpp"
 
 namespace {
-
-std::map<std::string, double> load_tenor_years(const std::string& path) {
-    std::map<std::string, double> m;
-    std::ifstream f(path);
-    std::string line;
-    std::getline(f, line);  // header
-    while (std::getline(f, line)) {
-        std::stringstream ss(line);
-        std::string tenor, yrs;
-        std::getline(ss, tenor, ',');
-        std::getline(ss, yrs, ',');
-        if (!tenor.empty() && !yrs.empty()) m[tenor] = std::stod(yrs);
-    }
-    return m;
-}
-
-// Read the most recent row of latest.csv into aligned (years, par-yield) vecs.
-bool load_latest_curve(const std::string& csv, const std::string& tenor_csv,
-                       std::vector<double>& years, std::vector<double>& pars,
-                       std::string& date) {
-    auto tmap = load_tenor_years(tenor_csv);
-    std::ifstream f(csv);
-    if (!f) return false;
-    std::string header, row, last;
-    std::getline(f, header);
-    while (std::getline(f, row))
-        if (!row.empty()) last = row;
-    if (last.empty()) return false;
-
-    std::vector<std::string> cols;
-    { std::stringstream hs(header); std::string c;
-      while (std::getline(hs, c, ',')) cols.push_back(c); }
-    std::vector<std::string> vals;
-    { std::stringstream rs(last); std::string c;
-      while (std::getline(rs, c, ',')) vals.push_back(c); }
-
-    for (size_t i = 0; i < cols.size() && i < vals.size(); ++i) {
-        if (cols[i] == "date") { date = vals[i]; continue; }
-        if (vals[i].empty()) continue;                 // tenor not published today
-        auto it = tmap.find(cols[i]);
-        if (it == tmap.end()) continue;
-        years.push_back(it->second);
-        pars.push_back(std::stod(vals[i]) / 100.0);    // percent -> decimal
-    }
-    return !years.empty();
-}
-
-// On-the-run Treasury FRN quote from frn_latest.csv (last row = longest
-// maturity). Returns false if the file is missing/empty.
-struct FrnQuote {
-    std::string cusip, maturity_date;
-    double maturity_years = 0.0;
-    double spread = 0.0;      // decimal
-    double index_rate = 0.0;  // decimal
-};
-
-bool load_latest_frn(const std::string& csv, FrnQuote& q) {
-    std::ifstream f(csv);
-    if (!f) return false;
-    std::string header, row, last;
-    std::getline(f, header);
-    while (std::getline(f, row))
-        if (!row.empty()) last = row;
-    if (last.empty()) return false;
-    std::vector<std::string> v;
-    { std::stringstream rs(last); std::string c;
-      while (std::getline(rs, c, ',')) v.push_back(c); }
-    if (v.size() < 6) return false;
-    q.cusip = v[1];
-    q.maturity_date = v[2];
-    q.maturity_years = std::stod(v[3]);
-    q.spread = std::stod(v[4]) / 100.0;      // percent -> decimal
-    q.index_rate = std::stod(v[5]) / 100.0;
-    return true;
-}
 
 void print_report(const std::string& name, const tbp::RiskReport& r,
                   const tbp::DiscountCurve& curve) {
@@ -113,7 +37,7 @@ int main(int argc, char** argv) {
 
     bool loaded = false;
     if (argc >= 3)
-        loaded = load_latest_curve(argv[1], argv[2], years, pars, date);
+        loaded = tbp::io::load_latest_curve(argv[1], argv[2], years, pars, date);
     if (!loaded) {
         // Fallback synthetic par curve (decimal).
         years = {0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30};
@@ -137,8 +61,8 @@ int main(int argc, char** argv) {
     print_report("Agency 4.00% 10y (+25bp)", tbp::analyze(agy, curve, /*spread=*/0.0025), curve);
 
     // --- Treasury FRN: dual-curve (discount + forecast) pricing -------------
-    FrnQuote q{"synthetic", "n/a", 2.0, 0.0010, 0.0380};
-    if (argc >= 4 && load_latest_frn(argv[3], q)) {
+    tbp::io::FrnQuote q{"synthetic", "n/a", 2.0, 0.0010, 0.0380};
+    if (argc >= 4 && tbp::io::load_latest_frn(argv[3], q)) {
         std::printf("\nTFRN quote: %s mat %s (%.3fy)  spread=%.1fbp  index=%.4f%%\n",
                     q.cusip.c_str(), q.maturity_date.c_str(), q.maturity_years,
                     q.spread * 1e4, q.index_rate * 1e2);
@@ -166,6 +90,49 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < fr.key_rate_dv01_discount.size(); ++i)
         std::printf("    t=%6.2fy : %+.6f | %+.6f\n", tvec[i].item<double>(),
                     fr.key_rate_dv01_discount[i], fr.key_rate_dv01_forecast[i]);
+
+    // --- Instrument curve: bootstrap from actual on-the-run quotes ----------
+    // securities_latest.csv holds every on-the-run bill/note/bond with its
+    // daily quote (bill closes + CMT yields; see python/fetch_securities.py).
+    // The curve is built so each security reprices to its market dirty price;
+    // the 20Y and 30Y bonds are then priced as products off that curve.
+    std::vector<tbp::io::SecurityQuote> secs;
+    std::string sec_date;
+    if (argc >= 5 && tbp::io::load_securities(argv[4], secs, sec_date)) {
+        std::vector<double> m, c, y;
+        for (const auto& s : secs) {
+            m.push_back(s.maturity_years);
+            c.push_back(s.coupon);
+            y.push_back(s.quote_yield);
+        }
+        auto icurve = tbp::DiscountCurve::bootstrap_from_quotes(
+            torch::tensor(m, torch::kFloat64), torch::tensor(c, torch::kFloat64),
+            torch::tensor(y, torch::kFloat64), /*freq=*/2);
+
+        std::printf("\nInstrument curve: %s, bootstrapped from %zu on-the-run "
+                    "securities\n  %-8s %-9s  %9s %8s %9s\n",
+                    sec_date.c_str(), secs.size(),
+                    "term", "cusip", "maturity", "quote%", "zero%");
+        for (size_t i = 0; i < secs.size(); ++i)
+            std::printf("  %-8s %-9s  %8.3fy %8.3f %9.4f\n",
+                        secs[i].term.c_str(), secs[i].cusip.c_str(),
+                        secs[i].maturity_years, secs[i].quote_yield * 100.0,
+                        icurve.node_zeros()[i].item<double>() * 100.0);
+
+        for (const auto& s : secs) {
+            if (s.type != "Bond") continue;  // the 20Y and 30Y products
+            tbp::FixedRateBond b{100.0, s.coupon, 2, s.maturity_years};
+            double model_dirty = tbp::price(b, icurve).item<double>();
+            char name[160];
+            std::snprintf(name, sizeof name,
+                          "UST %s %.3f%% %s (%s)  [model dirty %.4f]",
+                          s.term.c_str(), s.coupon * 100.0,
+                          s.maturity_date.c_str(), s.cusip.c_str(), model_dirty);
+            print_report(name, tbp::analyze(b, icurve, /*spread=*/0.0), icurve);
+        }
+    } else {
+        std::printf("\nInstrument curve: no securities CSV given, skipped\n");
+    }
 
     return 0;
 }

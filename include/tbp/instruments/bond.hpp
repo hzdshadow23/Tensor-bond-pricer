@@ -4,7 +4,7 @@
 // agencies, munis, and corporates are explicit future work.
 #pragma once
 #include <torch/torch.h>
-#include "tbp/curve.hpp"
+#include "tbp/core/curve.hpp"
 
 namespace tbp {
 

@@ -1,4 +1,4 @@
-#include "tbp/frn.hpp"
+#include "tbp/instruments/frn.hpp"
 #include <torch/autograd.h>
 #include <cmath>
 #include <stdexcept>

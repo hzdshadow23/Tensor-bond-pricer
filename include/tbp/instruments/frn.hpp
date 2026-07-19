@@ -19,7 +19,7 @@
 #pragma once
 #include <torch/torch.h>
 #include <vector>
-#include "tbp/curve.hpp"
+#include "tbp/core/curve.hpp"
 
 namespace tbp {
 

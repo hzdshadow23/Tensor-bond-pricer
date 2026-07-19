@@ -1,5 +1,5 @@
-#include "tbp/bond.hpp"
-#include "tbp/schedule.hpp"
+#include "tbp/instruments/bond.hpp"
+#include "tbp/core/schedule.hpp"
 #include <torch/autograd.h>
 
 namespace tbp {

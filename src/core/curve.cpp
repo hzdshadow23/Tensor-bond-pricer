@@ -1,4 +1,5 @@
-#include "tbp/curve.hpp"
+#include "tbp/core/curve.hpp"
+#include "tbp/core/schedule.hpp"
 #include <stdexcept>
 
 namespace tbp {
@@ -98,6 +99,70 @@ DiscountCurve DiscountCurve::bootstrap_from_par(const torch::Tensor& tenors_in,
         zeros = new_zeros;
     }
     return DiscountCurve(tenors, zeros);
+}
+
+DiscountCurve DiscountCurve::bootstrap_from_quotes(const torch::Tensor& mats_in,
+                                                   const torch::Tensor& cpns_in,
+                                                   const torch::Tensor& ylds_in,
+                                                   int freq) {
+    auto mats = mats_in.to(kF64).contiguous();
+    auto cpns = cpns_in.to(kF64).contiguous();
+    auto ylds = ylds_in.to(kF64).contiguous();
+    const int64_t n = mats.size(0);
+    if (cpns.size(0) != n || ylds.size(0) != n) {
+        throw std::invalid_argument("maturities/coupons/yields must be aligned");
+    }
+    const double step = 1.0 / freq;
+
+    // Step 1: quoted yield -> target dirty price (face = 1) per instrument.
+    // Bills use the simple money-market convention; coupon securities use the
+    // street formula on the front-stub schedule (full first coupon, which is
+    // what a dirty price contains).
+    std::vector<double> target(n);
+    std::vector<std::vector<double>> sched(n);
+    for (int64_t i = 0; i < n; ++i) {
+        double T = mats[i].item<double>();
+        double c = cpns[i].item<double>();
+        double y = ylds[i].item<double>();
+        if (c <= 1e-12) {
+            target[i] = 1.0 / (1.0 + y * T);
+            sched[i] = {T};
+            continue;
+        }
+        sched[i] = coupon_times(T, freq);
+        double cpn = c * step, px = 0.0;
+        for (double tk : sched[i]) px += cpn * std::pow(1.0 + y * step, -freq * tk);
+        px += std::pow(1.0 + y * step, -freq * T);
+        target[i] = px;
+    }
+
+    // Step 2: sequential solve, sweeping so interpolated intermediate coupon
+    // DFs are self-consistent (same scheme as bootstrap_from_par).
+    auto zeros = ylds.clone();
+    for (int iter = 0; iter < 8; ++iter) {
+        DiscountCurve cur(mats, zeros);
+        auto new_zeros = zeros.clone();
+        for (int64_t i = 0; i < n; ++i) {
+            double T = mats[i].item<double>();
+            double c = cpns[i].item<double>();
+            double df_T;
+            if (c <= 1e-12) {
+                df_T = target[i];
+            } else {
+                double cpn = c * step, pv_known = 0.0;
+                const auto& tk = sched[i];
+                for (size_t k = 0; k + 1 < tk.size(); ++k) {
+                    pv_known += cpn *
+                        cur.discount(torch::tensor({tk[k]}, kF64)).item<double>();
+                }
+                df_T = (target[i] - pv_known) / (1.0 + cpn);
+            }
+            df_T = std::max(df_T, 1e-8);
+            new_zeros[i] = -std::log(df_T) / T;
+        }
+        zeros = new_zeros;
+    }
+    return DiscountCurve(mats, zeros);
 }
 
 }  // namespace tbp
