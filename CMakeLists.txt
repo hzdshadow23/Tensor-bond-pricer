@@ -12,16 +12,21 @@ find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 # --- core library -----------------------------------------------------------
+# Layout: include/tbp/{core,instruments,io} with a mirrored src/ tree.
+#   core        curve math (tensor curve, bootstraps) + schedule helpers
+#   instruments fixed-rate bond, Treasury FRN
+#   io          CSV loaders for the data/curves cache (std-only, no torch)
 add_library(tbp
-    src/curve.cpp
-    src/bond.cpp
-    src/frn.cpp
+    src/core/curve.cpp
+    src/instruments/bond.cpp
+    src/instruments/frn.cpp
+    src/io/csv.cpp
 )
 target_include_directories(tbp PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(tbp PUBLIC ${TORCH_LIBRARIES})
 
 # --- demo executable --------------------------------------------------------
-add_executable(price_bonds src/main.cpp)
+add_executable(price_bonds apps/price_bonds.cpp)
 target_link_libraries(price_bonds PRIVATE tbp)
 
 # --- tests ------------------------------------------------------------------

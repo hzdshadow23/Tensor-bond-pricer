@@ -1,0 +1,15 @@
+date,type,term,cusip,coupon,maturity_date,maturity_years,quote_yield,quote_disc,quote_source
+2026-07-17,Bill,4-Week,912797UU9,0.0,2026-08-18,0.087611,3.71,3.65,bill_rates_close
+2026-07-17,Bill,6-Week,912797TY3,0.0,2026-08-27,0.112252,3.7,3.64,bill_rates_close
+2026-07-17,Bill,8-Week,912797VC8,0.0,2026-09-15,0.164271,3.72,3.65,bill_rates_close
+2026-07-17,Bill,13-Week,912797UK1,0.0,2026-10-15,0.246407,3.8,3.71,bill_rates_close
+2026-07-17,Bill,17-Week,912797VX2,0.0,2026-11-17,0.336756,3.85,3.75,bill_rates_close
+2026-07-17,Bill,26-Week,912797VT1,0.0,2027-01-14,0.495551,3.92,3.79,bill_rates_close
+2026-07-17,Bill,52-Week,912797VQ7,0.0,2027-07-08,0.974675,4.0,3.83,bill_rates_close
+2026-07-17,Note,2-Year,91282CQY0,4.125,2028-06-30,1.954825,4.18,,par_yield_cmt
+2026-07-17,Note,3-Year,91282CQZ7,4.125,2029-07-15,2.995209,4.21,,par_yield_cmt
+2026-07-17,Note,5-Year,91282CQX2,4.125,2031-06-30,4.952772,4.28,,par_yield_cmt
+2026-07-17,Note,7-Year,91282CQW4,4.25,2033-06-30,6.954141,4.4,,par_yield_cmt
+2026-07-17,Note,10-Year,91282CQQ7,4.375,2036-05-15,9.828884,4.55,,par_yield_cmt
+2026-07-17,Bond,20-Year,912810UV8,5.0,2046-05-15,19.827515,5.07,,par_yield_cmt
+2026-07-17,Bond,30-Year,912810UU0,5.0,2056-05-15,29.828884,5.06,,par_yield_cmt

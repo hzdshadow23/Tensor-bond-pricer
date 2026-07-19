@@ -31,6 +31,17 @@ C++ (libtorch) for deployment. Same ATen/autograd engine underneath.
   bootstrap. Points below one coupon period are treated as simple money-market
   zeros; longer points are par bonds solved node-by-node, sweeping the grid a
   few times so the interpolation used for intermediate coupons is self-consistent.
+- `bootstrap_from_quotes(maturities, coupons, yields, freq)`: same sweep
+  machinery, but the inputs are **actual on-the-run securities** (the daily
+  quotes in `securities_latest.csv`) rather than the published par grid. Each
+  quote is first converted to a target dirty price — bills via the simple
+  money-market convention `DF = 1/(1+yT)`, coupon securities via the street
+  formula `P = Σ cf_k (1+y/f)^(-f·t_k)` on the front-stub schedule counted
+  back from maturity — and node zeros are then solved so the curve reprices
+  every instrument. When every instrument is an on-grid par bond this
+  degenerates exactly to `bootstrap_from_par` (unit test). The curve nodes sit
+  at the instruments' true maturities (e.g. 19.83y for the current 20Y), so
+  key-rate risk buckets line up with the hedge instruments themselves.
 
 **FixedRateBond** — `include/tbp/bond.hpp`
 
@@ -77,12 +88,23 @@ each with its own spread curve (and, eventually, its own credit/tax adjustments)
 ## 4. Data pipeline
 
 ```
-treasury.gov XML  ──►  python/fetch_treasury.py  ──►  data/curves/latest.csv
-                                                        data/curves/tenors.csv
-                                                              │
-                                                              ▼
-                              main.cpp loads CSV ──► bootstrap_from_par ──► price/analyze
+treasury.gov par XML  ──►  fetch_treasury.py  ──►  latest.csv + tenors.csv
+fiscaldata FRN API    ──►  fetch_frn.py       ──►  frn_latest.csv
+TA_WS auctions        ─┐
+bill-rates XML        ─┼─► fetch_securities.py ──► securities_latest.csv
+par-yield (CMT) XML   ─┘
+                            │
+                            ▼
+        apps/price_bonds.cpp ──► bootstrap_from_par (published grid)
+                             ──► bootstrap_from_quotes (on-the-run instruments)
+                             ──► price/analyze (UST, Agency, TFRN, 20Y, 30Y)
 ```
+
+Per-security daily quotes: bills have a true per-CUSIP daily close (Daily
+Treasury Bill Rates feed). Notes/bonds have no scriptable public per-CUSIP
+price feed (FedInvest blocks scripts — verified 2026-07), so the on-the-run
+CUSIP/coupon/maturity from TA_WS is paired with the CMT par yield at its tenor
+as the daily yield quote (near-par v0 approximation).
 
 Daily granularity only. Additional sources (FRED for agency spreads, EMMA/MSRB
 for muni, TRACE for corporate) attach as sibling `fetch_*.py` writing the same
@@ -96,8 +118,11 @@ schema.
 - **Interpolation** is linear-in-zero. Consider log-linear on discount factors
   or monotone-convex; a **tensor-product spline** across (tenor × sector) is the
   eventual home for the "tensor curve" name.
-- **Bootstrap** assumes par instruments on the published grid. Real desks fit to
-  actual on-the-run/auctioned issues.
+- **Bootstrap from real issues** exists (`bootstrap_from_quotes`) but takes
+  the CMT par yield as each note/bond's YTM (near-par approximation) and
+  ignores accrued-interest day-count detail; next step is true quoted
+  prices/yields per CUSIP if a scriptable source appears, and a spline fit to
+  more than one issue per tenor.
 - **Sector spread** is flat; move to a fitted spread curve, then OAS once
   options (callable agencies) are introduced.
 - **No options.** Callable/putable need a short-rate lattice or Monte Carlo;

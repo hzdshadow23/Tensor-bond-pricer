@@ -4,9 +4,9 @@
 #include <cmath>
 #include <cstdio>
 
-#include "tbp/bond.hpp"
-#include "tbp/curve.hpp"
-#include "tbp/frn.hpp"
+#include "tbp/core/curve.hpp"
+#include "tbp/instruments/bond.hpp"
+#include "tbp/instruments/frn.hpp"
 
 static int failures = 0;
 #define CHECK(cond, msg)                                                    \
@@ -94,6 +94,68 @@ int main() {
         double bump_dv01 = r.dirty_pv - pv_up;
         CHECK(close(r.dv01, bump_dv01, 1e-6 + 0.01 * std::fabs(bump_dv01)),
               "FRN autograd DV01 == bump-and-reprice (both curves +1bp)");
+    }
+
+    // 6) bootstrap_from_quotes degenerates to bootstrap_from_par when every
+    //    instrument is an on-grid par bond (coupon == street yield -> price
+    //    100 exactly), so the two bootstraps must produce the same zeros.
+    {
+        auto tenors = torch::tensor({0.5, 1.0, 2.0, 5.0, 10.0}, f64);
+        auto par = torch::tensor({0.040, 0.041, 0.042, 0.044, 0.046}, f64);
+        auto from_par = DiscountCurve::bootstrap_from_par(tenors, par, 2);
+        auto from_qts = DiscountCurve::bootstrap_from_quotes(tenors, par, par, 2);
+        double max_diff =
+            (from_par.node_zeros() - from_qts.node_zeros()).abs().max().item<double>();
+        CHECK(max_diff < 1e-8, "quote bootstrap == par bootstrap for par instruments");
+    }
+
+    // 7) Round-trip on a realistic on-the-run set (bills + seasoned coupon
+    //    securities off the coupon grid): the bootstrapped curve must reprice
+    //    every instrument to the dirty price implied by its quoted yield.
+    {
+        auto mats = torch::tensor({0.0876, 0.2464, 0.4956, 0.9747,
+                                   1.9548, 4.9528, 9.8289, 19.8275, 29.8289}, f64);
+        auto cpns = torch::tensor({0.0, 0.0, 0.0, 0.0,
+                                   0.04125, 0.04125, 0.04375, 0.05, 0.05}, f64);
+        auto ylds = torch::tensor({0.0371, 0.0380, 0.0392, 0.0400,
+                                   0.0418, 0.0428, 0.0455, 0.0507, 0.0506}, f64);
+        auto curve = DiscountCurve::bootstrap_from_quotes(mats, cpns, ylds, 2);
+
+        double worst = 0.0;
+        for (int64_t i = 0; i < mats.size(0); ++i) {
+            double T = mats[i].item<double>();
+            double c = cpns[i].item<double>();
+            double y = ylds[i].item<double>();
+            double market, model;
+            if (c == 0.0) {  // bill: simple money-market discounting
+                market = 1.0 / (1.0 + y * T);
+                model = curve.discount(torch::tensor({T}, f64)).item<double>();
+            } else {         // street dirty price vs curve PV, same schedule
+                FixedRateBond b{1.0, c, 2, T};
+                auto t = b.times();
+                market = 0.0;
+                for (int64_t k = 0; k < t.size(0); ++k) {
+                    double tk = t[k].item<double>();
+                    double cf = c / 2 + (k + 1 == t.size(0) ? 1.0 : 0.0);
+                    market += cf * std::pow(1.0 + y / 2, -2.0 * tk);
+                }
+                model = price(b, curve).item<double>();
+            }
+            worst = std::max(worst, std::fabs(model - market));
+        }
+        CHECK(worst < 1e-6, "instrument curve reprices every quote (bills+notes+bonds)");
+
+        // 20Y and 30Y products off the instrument curve: sane risk profile.
+        FixedRateBond b20{100.0, 0.05, 2, 19.8275};
+        FixedRateBond b30{100.0, 0.05, 2, 29.8289};
+        auto r20 = analyze(b20, curve, 0.0);
+        auto r30 = analyze(b30, curve, 0.0);
+        CHECK(r20.dv01 > 0.0 && r30.dv01 > r20.dv01,
+              "30y DV01 > 20y DV01 > 0 off instrument curve");
+        CHECK(r20.mod_duration > 10.0 && r20.mod_duration < 15.0,
+              "20y mod duration in [10,15]");
+        CHECK(r30.mod_duration > 13.0 && r30.mod_duration < 19.0,
+              "30y mod duration in [13,19]");
     }
 
     std::printf("\n%s (%d failure(s))\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED", failures);
