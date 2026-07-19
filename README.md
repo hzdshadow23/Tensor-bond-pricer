@@ -1,6 +1,6 @@
-# tensor-bond-pricer
+# Tensor-bond-pricer
 
-Price option-free **Treasury** and **Agency** bonds with a **tensor curve
+Price **Treasury** and **Agency** bonds with a **tensor curve
 framework**: discount curves and cashflows are [libtorch] tensors, so pricing is
 vectorized and **risk (DV01, key-rate DV01, duration) comes straight from
 automatic differentiation** — no bump-and-reprice.
