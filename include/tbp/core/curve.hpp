@@ -12,15 +12,23 @@
 // spread curve, so a full multi-sector surface is a [n_sectors, n_nodes] tensor.
 #pragma once
 #include <torch/torch.h>
+#include <string>
 #include <vector>
 
+// `tbp` = tensor-bond-pricer, this project's namespace. All public API lives
+// in tbp:: (core curve/conventions, instruments, CurveStore), with nested
+// namespaces for subareas: tbp::io (csv quote-cache loaders), tbp::curves
+// (well-known curve names), tbp::treasury / tbp::muni / tbp::corporate
+// (sector taxonomies).
 namespace tbp {
 
 class DiscountCurve {
 public:
     // node_times: [N] strictly ascending, in years.
     // node_zeros: [N] continuously-compounded zero rates (decimal, e.g. 0.042).
-    DiscountCurve(torch::Tensor node_times, torch::Tensor node_zeros);
+    // name: registry / persistence identity, e.g. "YC_TSY" (see CurveStore).
+    DiscountCurve(torch::Tensor node_times, torch::Tensor node_zeros,
+                  std::string name = "");
 
     // Continuously-compounded zero rate at arbitrary times `t` ([M] tensor).
     // Linear interpolation in zero-rate space; flat extrapolation past the ends.
@@ -41,6 +49,19 @@ public:
     const torch::Tensor& node_zeros() const { return node_zeros_; }
     const torch::Tensor& node_times() const { return node_times_; }
     int64_t size() const { return node_times_.size(0); }
+
+    // Curve identity, e.g. "YC_TSY". Used as the key in CurveStore and stamped
+    // into the persisted file. Naming convention: YC_<SECTOR> for discount
+    // curves (YC_TSY, later YC_MUNI / YC_CORP), FC_<SECTOR> for forecast
+    // (projection) curves.
+    const std::string& name() const { return name_; }
+    void set_name(std::string name) { name_ = std::move(name); }
+
+    // Persist the curve as a native libtorch archive (NOT csv): node times,
+    // node zeros and the name. The quote CSVs under data/curves/ are only the
+    // raw market-data cache; a bootstrapped curve is saved/loaded as an object.
+    void save(const std::string& path) const;
+    static DiscountCurve load(const std::string& path);
 
     // Bootstrap a zero curve from par yields (the shape Treasury publishes).
     //   tenors     : [N] years (e.g. {0.25, 0.5, 1, 2, 5, 10, 30})
@@ -72,6 +93,7 @@ public:
 private:
     torch::Tensor node_times_;  // [N], float64, no grad
     torch::Tensor node_zeros_;  // [N], float64, requires_grad
+    std::string name_;          // e.g. "YC_TSY"; empty for anonymous curves
 };
 
 // Build a forecast (projection) curve from a discount curve: same node times,
