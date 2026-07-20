@@ -30,6 +30,10 @@ target_link_libraries(tbp PUBLIC ${TORCH_LIBRARIES})
 add_executable(price_bonds apps/price_bonds.cpp)
 target_link_libraries(price_bonds PRIVATE tbp)
 
+# --- CUSIP pricer: NPV / schedule / accrued / quote check by CUSIP -----------
+add_executable(price_cusip apps/price_cusip.cpp)
+target_link_libraries(price_cusip PRIVATE tbp)
+
 # --- tests ------------------------------------------------------------------
 enable_testing()
 add_executable(test_pricing tests/test_pricing.cpp)

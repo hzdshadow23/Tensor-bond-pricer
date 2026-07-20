@@ -8,6 +8,7 @@
 #include "tbp/core/conventions.hpp"
 #include "tbp/core/curve.hpp"
 #include "tbp/core/curve_store.hpp"
+#include "tbp/core/schedule.hpp"
 #include "tbp/instruments/bond.hpp"
 #include "tbp/instruments/frn.hpp"
 #include "tbp/instruments/treasury/treasury.hpp"
@@ -254,6 +255,24 @@ int main() {
               "TFRN defaults: Treasury sector, ACT/360, weekly resets");
         auto bill = tbp::treasury::make_bill(100.0, 0.25);
         CHECK(bill.coupon_rate == 0.0, "T-bill is a zero-coupon FixedRateBond");
+    }
+
+    // 10) Sub-period maturity regression: a bill maturing inside one coupon
+    //     period must still price to face * DF(T) — the schedule can never be
+    //     empty for a positive maturity (bug found pricing the 4-week bill:
+    //     n = int(T*freq + 0.5) rounded to 0 -> silent NPV of zero).
+    {
+        auto t = torch::tensor({0.0876, 0.25, 1.0, 5.0}, f64);
+        auto z = torch::full({4}, 0.04, f64);
+        DiscountCurve c(t, z);
+        for (double T : {0.0876, 0.1123, 0.164, 0.2464}) {
+            FixedRateBond bill{100.0, 0.0, 2, T};  // freq=2 like the demo path
+            double pv = price(bill, c).item<double>();
+            double df = 100.0 * c.discount(torch::tensor({T}, f64)).item<double>();
+            CHECK(close(pv, df, 1e-10), "sub-period bill NPV == face * DF(T)");
+        }
+        CHECK(coupon_times(0.0876, 2).size() == 1, "4-week bill schedule has 1 cashflow");
+        CHECK(coupon_times(0.0, 2).empty(), "zero maturity -> empty schedule");
     }
 
     std::printf("\n%s (%d failure(s))\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED", failures);

@@ -199,6 +199,11 @@ schema.
 
 - Reprice par bonds → ~100 (in `tests/`).
 - Key-rate DV01s sum to parallel DV01 (in `tests/`).
+- **Daily round-trip on live quotes**: `python/test_otr_pricing.py` prices
+  every on-the-run CUSIP off YC_TSY and checks model clean == quote-implied
+  clean to within 1 cent (the curve must reprice its own instruments); it
+  found a real bug on first run (sub-period bills priced to zero — empty
+  schedule from `coupon_times` rounding, fixed + regression-tested).
 - Cross-check PV/duration against QuantLib or a spreadsheet for a few known bonds
   before trusting the engine on new instruments.
 
