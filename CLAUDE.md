@@ -67,6 +67,11 @@ src/
 apps/
   price_bonds.cpp       demo: par curve + UST/Agency/TFRN, then instrument
                         curve from on-the-run quotes -> price 20Y + 30Y
+  price_cusip.cpp       price BY CUSIP off YC_TSY: NPV (DCF), date-based
+                        payment schedule, ACT/ACT accrued, model clean vs
+                        quote-implied clean with MATCH/MISMATCH verdict
+                        (exit 2 on mismatch); --all sweeps every tenor,
+                        --json emits machine-readable output
 tests/
   test_pricing.cpp      dependency-free sanity checks (ctest)
 python/
@@ -74,6 +79,9 @@ python/
   fetch_frn.py          TFRN quotes (index + spread per CUSIP, fiscaldata API)
   fetch_securities.py   on-the-run bill/note/bond daily quotes (TA_WS +
                         bill-rates feed + CMT) -> securities_latest.csv
+  test_otr_pricing.py   OTR pricing test harness: runs price_cusip --all,
+                        checks every tenor matches its quote + schedule
+                        sanity; --html writes a self-contained UI report
 data/curves/          raw quote cache (CSV): latest.csv, tenors.csv,
                       frn_latest.csv, securities_latest.csv,
                       treasury_par_YYYY.csv; plus persisted curve OBJECTS
@@ -98,8 +106,11 @@ python3 python/fetch_frn.py
 python3 python/fetch_securities.py
 ./build/price_bonds data/curves/latest.csv data/curves/tenors.csv \
                     data/curves/frn_latest.csv data/curves/securities_latest.csv
+# 3b. Price one security by CUSIP (NPV, schedule, accrued, quote check)
+./build/price_cusip data/curves/securities_latest.csv 912810UV8
 # 4. Tests
 cd build && ctest --output-on-failure
+python3 python/test_otr_pricing.py --html build/otr_report.html  # + UI report
 ```
 
 The demo falls back to a built-in synthetic par curve if no CSV is passed, so
